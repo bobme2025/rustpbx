@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 pub struct HttpCallRouter {
     pub config: HttpRouterConfig,
@@ -166,6 +166,13 @@ struct HttpRequestPayload {
 #[serde(rename_all = "snake_case")]
 enum HttpRouteAction {
     Forward,
+    /// Route the call straight into a call application instead of dialing
+    /// targets: `app` names the builtin app (`park`, `ivr`, `voicemail`, …)
+    /// and `app_params` is handed verbatim to the app factory. This is the
+    /// only runtime path that can reach an app whose parameters (e.g. park's
+    /// correlation key) differ per call, so it must not depend on static
+    /// dialplan rules.
+    Application,
     Reject,
     Abort,
     NotHandled,
@@ -214,6 +221,18 @@ struct HttpRtpConfig {
 struct HttpResponsePayload {
     pub action: HttpRouteAction,
     pub targets: Option<Vec<HttpRouteTarget>>,
+    /// Builtin app to start when `action` is `application`; ignored otherwise.
+    /// Missing or empty is a hard error (the call fails with 500) rather than a
+    /// silent fall-through, so a broken router cannot park nothing and leave
+    /// the caller ringing into the void.
+    pub app: Option<String>,
+    /// Opaque params for the app factory, forwarded verbatim. For park the
+    /// shape is `{"target": "pocket?key=pk-…&agent=…"}`.
+    pub app_params: Option<serde_json::Value>,
+    /// Answer the caller leg before the app starts. Defaults to `false` so
+    /// apps that negotiate their own early media (park answers 183 and plays
+    /// ringback/hold) keep control of call setup.
+    pub auto_answer: Option<bool>,
     pub rtp_config: Option<HttpRtpConfig>,
     pub strategy: Option<HttpRouteStrategy>,
     pub status: Option<u16>,
@@ -413,7 +432,10 @@ impl CallRouter for HttpCallRouter {
                 }
                 .with_code(&crate::proxy::routing::http_error_catalog::NOT_HANDLED));
             }
-            HttpRouteAction::Forward => {
+            // `application` shares the whole call-level assembly below (media,
+            // recording, headers, timeouts) and only skips targets, so the app
+            // inherits exactly the settings a forwarding route would.
+            HttpRouteAction::Forward | HttpRouteAction::Application => {
                 let parse_error = |error: anyhow::Error| {
                     RouteError {
                         error,
@@ -421,6 +443,33 @@ impl CallRouter for HttpCallRouter {
                         extensions: None,
                     }
                     .with_code(&crate::proxy::routing::http_error_catalog::PARSE_FAILED)
+                };
+                let is_application = matches!(&result.action, HttpRouteAction::Application);
+                let application = if is_application {
+                    let app = result
+                        .app
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|name| !name.is_empty())
+                        .ok_or_else(|| {
+                            parse_error(anyhow!(
+                                "HTTP router application action requires a non-empty 'app' field"
+                            ))
+                        })?;
+                    Some((
+                        app.to_string(),
+                        result.app_params.clone(),
+                        result.auto_answer.unwrap_or(false),
+                    ))
+                } else {
+                    if result.app.is_some() {
+                        warn!(
+                            %call_id,
+                            action = ?result.action,
+                            "HTTP router sent 'app' for a non-application action; ignoring it"
+                        );
+                    }
+                    None
                 };
                 let custom_headers = result.headers.map(|h| {
                     h.iter()
@@ -462,7 +511,14 @@ impl CallRouter for HttpCallRouter {
                 let rtp_external_ip =
                     result.rtp_config.as_ref().and_then(|c| c.external_ip).map(|ip| ip.to_string());
                 let mut attempts = Vec::new();
-                if let Some(targets) = result.targets {
+                if is_application && result.targets.is_some() {
+                    warn!(
+                        %call_id,
+                        "HTTP router application action ignores 'targets'; the app owns the call"
+                    );
+                }
+                let targets = if is_application { None } else { result.targets };
+                if let Some(targets) = targets {
                     for target in targets {
                         let (uri, retry_policy) = match target {
                             HttpRouteTarget::Uri(uri) => (uri, None),
@@ -579,7 +635,14 @@ impl CallRouter for HttpCallRouter {
                     dialplan = dialplan.with_caller(uri);
                 }
 
-                dialplan = dialplan.with_targets(strategy);
+                // The app owns the call; everything else in the dialplan
+                // (media, recording, headers, timers) still applies.
+                dialplan = match application {
+                    Some((app_name, app_params, auto_answer)) => {
+                        dialplan.with_application(app_name, app_params, auto_answer)
+                    }
+                    None => dialplan.with_targets(strategy),
+                };
 
                 if result.record.is_some() {
                     if let Some(record) = result.record {
