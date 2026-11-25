@@ -42,7 +42,11 @@ pub fn rwi_to_call_command(
         | RwiCommandPayload::AppStop { .. }
         | RwiCommandPayload::AppChain { .. }
         | RwiCommandPayload::ConferenceEnd { .. }
-        | RwiCommandPayload::DtmfCollect(_) => {
+        | RwiCommandPayload::DtmfCollect(_)
+        // Park listing/info resolve at the processor level (park registry),
+        // never through the per-session command adapter.
+        | RwiCommandPayload::ParkList { .. }
+        | RwiCommandPayload::ParkInfo { .. } => {
             Err(AdapterError::NotSupported("session management command".to_string()).into())
         }
 
@@ -50,6 +54,26 @@ pub fn rwi_to_call_command(
             "originate requires separate handling".to_string(),
         )
         .into()),
+
+        // Park exit (pocket park): the processor already resolved the owning
+        // session from the park registry; the session handler forwards the
+        // payload to the running park app as `AppEvent::Custom("park.unpark")`.
+        RwiCommandPayload::Unpark {
+            stage,
+            destination,
+            cancel,
+            reason,
+            ring_timeout_secs,
+            record,
+            ..
+        } => Ok(CallCommand::Unpark {
+            stage,
+            destination: (!destination.is_empty()).then_some(destination),
+            cancel: Some(cancel),
+            reason,
+            ring_timeout_secs,
+            record,
+        }),
 
         // ========================================================================
         // Basic Call Control

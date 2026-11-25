@@ -478,6 +478,12 @@ pub(crate) enum TransferTarget {
         return_app: Option<ReturnTargetSpec>,
         from_user: Option<String>,
     },
+    /// Pocket agent park (`park:<context>?key=&agent=&…`): hold the caller
+    /// with 183 early media until a daemon `call.unpark` arrives.
+    Park {
+        /// Raw remainder after the `park:` prefix (`pocket?key=…`).
+        target: String,
+    },
 }
 
 /// Stable type tag for the RWI `call_transferred.transfer_target_type` field,
@@ -493,6 +499,7 @@ pub(crate) fn transfer_target_type_str(target: &TransferTarget) -> Option<&'stat
         TransferTarget::Realtime { .. } => Some("realtime"),
         TransferTarget::Bridge { .. } => Some("bridge"),
         TransferTarget::Sip { .. } => Some("sip"),
+        TransferTarget::Park { .. } => Some("park"),
     }
 }
 
@@ -720,6 +727,7 @@ pub(crate) fn parse_transfer_target(target: &str) -> TransferTarget {
                 TransferTarget::Voicemail { extension }
             }
             crate::call::TransferEndpoint::Conference(id) => TransferTarget::Conference { id },
+            crate::call::TransferEndpoint::Park(target) => TransferTarget::Park { target },
             crate::call::TransferEndpoint::Realtime(preset) => TransferTarget::Realtime { preset },
             // Plain SIP/TEL URI – ensure at least the `sip:` scheme.
             // Also extract `return_app` / `return_target` / `return_*` query
@@ -1835,6 +1843,10 @@ impl SipSession {
             TransferTarget::Realtime { preset } => {
                 info!(session_id = %self.id, %leg_id, %preset, "Handling realtime transfer by starting RealtimeApp");
                 self.start_realtime_app(&preset).await
+            }
+            TransferTarget::Park { target } => {
+                info!(session_id = %self.id, %leg_id, %target, "Handling park transfer by starting ParkApp");
+                self.start_park_app(&target).await
             }
             TransferTarget::Bridge {
                 endpoint,
@@ -3724,6 +3736,16 @@ impl SipSession {
         info!(session_id = %self.id, preset = %preset, "Starting realtime application");
         let params = Some(serde_json::json!({"preset": preset}));
         self.ensure_app_running("realtime", params, &format!("realtime preset '{}'", preset))
+            .await
+    }
+
+    /// Start the pocket park app on the raw `park:` target remainder
+    /// (`<context>?key=&agent=&…`). The park app holds the caller with 183
+    /// early media and registers itself for the daemon's `call.unpark`.
+    pub(crate) async fn start_park_app(&self, target: &str) -> Result<()> {
+        info!(session_id = %self.id, target = %target, "Starting park application");
+        let params = Some(serde_json::json!({ "target": target }));
+        self.ensure_app_running("park", params, &format!("park '{}'", target))
             .await
     }
 

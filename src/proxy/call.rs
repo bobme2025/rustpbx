@@ -910,6 +910,21 @@ impl CallModule {
                         true,
                     ));
                 }
+                crate::call::TransferEndpoint::Park(park_target) => {
+                    let reference = park_target.trim();
+                    if reference.is_empty() {
+                        return Err(RouteError::from((
+                            anyhow!("always-forwarding park target is empty"),
+                            Some(rsipstack::sip::StatusCode::ServerInternalError),
+                        ))
+                        .with_code(&crate::proxy::error_catalog::ALWAYS_FWD_PARK_EMPTY));
+                    }
+                    forced_pending_app = Some((
+                        "park".to_string(),
+                        Some(serde_json::json!({ "target": reference })),
+                        true,
+                    ));
+                }
                 crate::call::TransferEndpoint::Realtime(preset) => {
                     let preset_name = preset.trim();
                     if preset_name.is_empty() {

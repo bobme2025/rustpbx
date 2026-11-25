@@ -430,6 +430,54 @@ pub enum RwiCommandPayload {
         #[serde(default)]
         call_id: String,
     },
+    /// Exit a parked call (pocket park, doc 附录B). Processor-level: the
+    /// park key / `X-cid` / `cc_call_id`+`called` is resolved against the
+    /// park registry into the owning session id, then dispatched as
+    /// `CallCommand::Unpark`. Two-stage (`stage:"leg"` / `"bridge"`); a
+    /// missing stage runs leg+bridge in one shot. `cancel:true` abandons.
+    #[serde(rename = "call.unpark")]
+    Unpark {
+        #[serde(default)]
+        call_id: String,
+        #[serde(default)]
+        key: String,
+        #[serde(default)]
+        cc_call_id: String,
+        #[serde(default)]
+        called: String,
+        #[serde(default)]
+        x_cid: String,
+        #[serde(default)]
+        destination: String,
+        stage: Option<crate::call::domain::ParkStage>,
+        #[serde(default)]
+        ring_timeout_secs: Option<u64>,
+        record: Option<bool>,
+        #[serde(default)]
+        cancel: bool,
+        #[serde(default)]
+        reason: Option<String>,
+    },
+    /// List parked calls (daemon 对账 / 兜底). Processor-level, answered
+    /// directly from the park registry.
+    #[serde(rename = "park.list")]
+    ParkList {
+        #[serde(default)]
+        context: Option<String>,
+        #[serde(default)]
+        called: Option<String>,
+        /// 1-based page over the park-time-ordered list (page size 100).
+        #[serde(default)]
+        page: Option<u32>,
+    },
+    /// Single parked-call detail (by session id or park key).
+    #[serde(rename = "call.park.info")]
+    ParkInfo {
+        #[serde(default)]
+        call_id: String,
+        #[serde(default)]
+        key: String,
+    },
 }
 
 impl RwiCommandPayload {
@@ -521,7 +569,13 @@ impl RwiCommandPayload {
             | RwiCommandPayload::Subscribe { .. }
             | RwiCommandPayload::Unsubscribe { .. }
             | RwiCommandPayload::ListCalls
-            | RwiCommandPayload::SessionResume { .. } => None,
+            | RwiCommandPayload::SessionResume { .. }
+            // Park commands resolve at the processor level against the
+            // process-wide park registry (doc §6a: the daemon targets the
+            // owning instance directly, no cross-node forwarding needed).
+            | RwiCommandPayload::Unpark { .. }
+            | RwiCommandPayload::ParkList { .. }
+            | RwiCommandPayload::ParkInfo { .. } => None,
         }
     }
 }

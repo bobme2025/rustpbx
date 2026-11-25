@@ -231,6 +231,24 @@ impl CallController {
         Ok(())
     }
 
+    /// Ring the caller with proactive early media: 183 Session Progress +
+    /// the given audio source looped until the far side answers (the park
+    /// app's caller-hold primitive).
+    ///
+    /// `path` accepts a file path (or an http(s):// URL, which the media
+    /// layer downloads) and the `tone://freq,duration` one-shot syntax. Only
+    /// file-ish sources reach the 183 path — the session's `handle_ring`
+    /// EarlyMedia arm requires a `MediaSource::File`, and `tone://` strings
+    /// are handled inside the file-source loader.
+    pub fn ring_with_early_media(&self, path: impl Into<String>) -> anyhow::Result<()> {
+        self.session.send_command(CallCommand::Ring {
+            leg_id: LegId::from("caller"),
+            ringback: Some(crate::call::domain::RingbackPolicy::EarlyMedia {
+                source: crate::call::domain::MediaSource::File { path: path.into() },
+            }),
+        })
+    }
+
     /// Start a realtime (AI voice) WebSocket bridge on the caller leg.
     ///
     /// The session connects to the endpoint (credentials ride the upgrade

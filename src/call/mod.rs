@@ -434,6 +434,9 @@ pub enum TransferEndpoint {
     Voicemail(String),
     /// Conference room identified by ID.
     Conference(String),
+    /// Pocket agent park: `park:<context>?key=&agent=&progress=&record=&max=`.
+    /// Holds the caller with 183 early media until an unpark arrives.
+    Park(String),
     /// Start the realtime (AI voice) app with a `[[realtime]]` preset name.
     Realtime(String),
 }
@@ -448,6 +451,7 @@ impl TransferEndpoint {
             TransferEndpoint::Ivr(_) => "ivr",
             TransferEndpoint::Voicemail(_) => "voicemail",
             TransferEndpoint::Conference(_) => "conference",
+            TransferEndpoint::Park(_) => "park",
             TransferEndpoint::Realtime(_) => "realtime",
         }
     }
@@ -455,9 +459,9 @@ impl TransferEndpoint {
     /// Parse a prefix‑based destination string.
     ///
     /// Handles `queue:`, `toivr:`, `ivr:`, `voicemail:`, `conference:`,
-    /// `realtime:`. Plain strings (no recognised prefix) are returned as
-    /// `Uri(String)`. Does **not** add a `sip:` scheme – callers that need it
-    /// should use [`build_sip_uri`] afterwards.
+    /// `park:`, `realtime:`. Plain strings (no recognised prefix) are
+    /// returned as `Uri(String)`. Does **not** add a `sip:` scheme – callers
+    /// that need it should use [`build_sip_uri`] afterwards.
     pub fn parse(value: &str) -> Option<Self> {
         let trimmed = value.trim();
         if trimmed.is_empty() {
@@ -470,6 +474,7 @@ impl TransferEndpoint {
             ("ivr:", |v| TransferEndpoint::Ivr(v)),
             ("voicemail:", |v| TransferEndpoint::Voicemail(v)),
             ("conference:", |v| TransferEndpoint::Conference(v)),
+            ("park:", |v| TransferEndpoint::Park(v)),
             ("realtime:", |v| TransferEndpoint::Realtime(v)),
         ];
 
@@ -497,6 +502,7 @@ impl std::fmt::Display for TransferEndpoint {
             TransferEndpoint::Ivr(name) => write!(f, "ivr:{}", name),
             TransferEndpoint::Voicemail(ext) => write!(f, "voicemail:{}", ext),
             TransferEndpoint::Conference(id) => write!(f, "conference:{}", id),
+            TransferEndpoint::Park(rest) => write!(f, "park:{}", rest),
             TransferEndpoint::Realtime(preset) => write!(f, "realtime:{}", preset),
         }
     }

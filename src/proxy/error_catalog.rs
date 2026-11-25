@@ -163,6 +163,17 @@ pub const ALWAYS_FWD_REALTIME_EMPTY: CallErrInfo = CallErrInfo {
     remediation_key: None,
 };
 
+pub const ALWAYS_FWD_PARK_EMPTY: CallErrInfo = CallErrInfo {
+    app: APP,
+    code: "proxy.always_forwarding_park_empty",
+    message: "Always-forwarding park target is empty",
+    sip_status: Some(500),
+    hangup_reason: CallRecordHangupReason::ServerUnavailable,
+    severity: ErrSeverity::Error,
+    locale_key: "errors.proxy.always_forwarding_park_empty",
+    remediation_key: None,
+};
+
 pub const ROUTE_RESOLUTION_ERROR: CallErrInfo = CallErrInfo {
     app: APP,
     code: "proxy.route_resolution_error",
@@ -226,6 +237,7 @@ pub const CATALOG: &[CallErrInfo] = &[
     ALWAYS_FWD_VOICEMAIL_EMPTY,
     ALWAYS_FWD_CONFERENCE_EMPTY,
     ALWAYS_FWD_REALTIME_EMPTY,
+    ALWAYS_FWD_PARK_EMPTY,
     ROUTE_RESOLUTION_ERROR,
     ROUTE_ABORTED,
     ROUTE_FAILED,

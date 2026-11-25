@@ -258,6 +258,46 @@ impl RwiCommandProcessor {
         }
     }
 
+    /// Resolve the owning session of a parked call from the `call.unpark`
+    /// parameters: explicit `call_id` → park `key` → raw `X-cid` →
+    /// `cc_call_id`+`called` (doc §3.3 / daemon D2 fallback order).
+    fn resolve_park_session(
+        &self,
+        call_id: &str,
+        key: &str,
+        cc_call_id: &str,
+        called: &str,
+        x_cid: &str,
+    ) -> Option<String> {
+        use crate::call::app::park::{ParkKey, ParkLookup, park_registry};
+        let registry = park_registry();
+        if !call_id.is_empty() {
+            return Some(call_id.to_string());
+        }
+        if !key.is_empty()
+            && let Some(entry) =
+                registry.resolve(&ParkLookup::Key(ParkKey::Custom(key.to_string())))
+        {
+            return Some(entry.call_id);
+        }
+        if !x_cid.is_empty()
+            && let Some(entry) = registry.resolve(&ParkLookup::Xcid(x_cid.to_string()))
+        {
+            return Some(entry.call_id);
+        }
+        if !cc_call_id.is_empty()
+            && !called.is_empty()
+            && let Ok(id) = cc_call_id.trim().parse::<u64>()
+            && let Some(entry) = registry.resolve(&ParkLookup::CcCall {
+                cc_call_id: id,
+                called: called.to_string(),
+            })
+        {
+            return Some(entry.call_id);
+        }
+        None
+    }
+
     pub async fn process_command(
         &self,
         command: RwiCommandPayload,
@@ -486,6 +526,68 @@ impl RwiCommandProcessor {
                 return self
                     .handle_transfer_cancel(consultation_call_id.clone())
                     .await;
+            }
+            // ── Pocket park (doc §3.4) ────────────────────────────────────
+            RwiCommandPayload::Unpark {
+                call_id,
+                key,
+                cc_call_id,
+                called,
+                x_cid,
+                ..
+            } => {
+                let Some(session_id) =
+                    self.resolve_park_session(call_id, key, cc_call_id, called, x_cid)
+                else {
+                    return Err(CommandError::CommandFailed(
+                        "parked call not found for the given key / x_cid / cc_call_id+called"
+                            .to_string(),
+                    ));
+                };
+                match self.dispatch_unified_command(&session_id, command.clone()) {
+                    Some(Ok(result)) => return Ok(result),
+                    Some(Err(error)) => return Err(error),
+                    None => {
+                        return Ok(CommandResult::Success);
+                    }
+                }
+            }
+            RwiCommandPayload::ParkList { context, called, page } => {
+                let entries =
+                    crate::call::app::park::park_registry()
+                        .list(context.as_deref(), called.as_deref());
+                let total = entries.len();
+                const PAGE_SIZE: usize = 100;
+                let page = page.unwrap_or(1).max(1);
+                let start = (page as usize - 1) * PAGE_SIZE;
+                let items: Vec<serde_json::Value> = entries
+                    .iter()
+                    .skip(start)
+                    .take(PAGE_SIZE)
+                    .map(crate::call::app::park::park_entry_json)
+                    .collect();
+                return Ok(CommandResult::ParkList {
+                    items,
+                    total,
+                    page,
+                });
+            }
+            RwiCommandPayload::ParkInfo { call_id, key } => {
+                let lookup = if !key.is_empty() {
+                    crate::call::app::park::ParkLookup::Key(
+                        crate::call::app::park::ParkKey::Custom(key.clone()),
+                    )
+                } else if !call_id.is_empty() {
+                    crate::call::app::park::ParkLookup::SessionId(call_id.clone())
+                } else {
+                    return Err(CommandError::CommandFailed(
+                        "call.park.info requires call_id or key".to_string(),
+                    ));
+                };
+                let entry = crate::call::app::park::park_registry()
+                    .resolve(&lookup)
+                    .map(|e| crate::call::app::park::park_entry_json(&e));
+                return Ok(CommandResult::ParkInfo { entry });
             }
             _ => {}
         }
@@ -3775,6 +3877,16 @@ pub enum CommandResult {
     ConferenceMemberRemoved {
         conf_id: String,
         call_id: String,
+    },
+    /// Pocket park: `park.list` result (park-time ordered page).
+    ParkList {
+        items: Vec<serde_json::Value>,
+        total: usize,
+        page: u32,
+    },
+    /// Pocket park: `call.park.info` result (`None` = no matching entry).
+    ParkInfo {
+        entry: Option<serde_json::Value>,
     },
     ConferenceMemberMuted {
         conf_id: String,

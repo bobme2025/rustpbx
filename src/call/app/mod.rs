@@ -89,6 +89,7 @@ pub mod conference;
 pub mod error_catalog;
 pub mod ivr;
 pub mod ivr_config;
+pub mod park;
 pub mod queue;
 pub mod realtime;
 pub mod rwi;
@@ -122,6 +123,10 @@ pub use controller::{
     RecordingInfo,
 };
 pub use event_loop::AppEventLoop;
+pub use park::{
+    ParkApp, ParkAppParams, ParkEntry, ParkKey, ParkLookup, ParkRegisterError, ParkRegistry,
+    ParkState, park_entry_json, park_registry,
+};
 pub use queue::{QueueDiagnosticRequest, QueueDispatchDiagnostic};
 
 // ─── CallApp Trait ──────────────────────────────────────────────────────────
@@ -136,6 +141,9 @@ pub enum CallAppType {
     Ivr,
     Conference,
     Queue,
+    /// Pocket agent park (`park:<context>`): 183 early-media hold +
+    /// daemon-driven two-stage unpark.
+    Park,
     /// Realtime (AI voice) WebSocket bridge.
     Realtime,
     Custom,
@@ -148,6 +156,7 @@ impl fmt::Display for CallAppType {
             CallAppType::Ivr => write!(f, "ivr"),
             CallAppType::Conference => write!(f, "conference"),
             CallAppType::Queue => write!(f, "queue"),
+            CallAppType::Park => write!(f, "park"),
             CallAppType::Realtime => write!(f, "realtime"),
             CallAppType::Custom => write!(f, "custom"),
         }

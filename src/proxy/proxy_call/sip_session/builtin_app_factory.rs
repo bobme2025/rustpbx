@@ -431,6 +431,15 @@ impl BuiltinAppFactory {
                     conf_id, caller_id,
                 )) as Box<dyn crate::call::app::CallApp>)
             }
+            "park" => {
+                // Pocket agent park: params carry the raw `park:` target
+                // remainder (`{"target": "pocket?key=…"}`) or structured
+                // fields; the app resolves the correlation key and ringback.
+                let app = crate::call::app::park::ParkApp::new(
+                    crate::call::app::park::ParkAppParams::from_params(params.as_ref()),
+                );
+                Some(Box::new(app) as Box<dyn crate::call::app::CallApp>)
+            }
             "queue" => {
                 let pending = context.pending_queue.lock().take()?;
                 let mut plan = pending.plan;

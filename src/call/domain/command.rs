@@ -157,6 +157,20 @@ impl TransferOutcome {
 pub type CallCommandTx = mpsc::Sender<CallCommand>;
 pub type CallCommandRx = mpsc::Receiver<CallCommand>;
 
+/// The two-stage exit from a parked call (`CallCommand::Unpark`).
+///
+/// `Leg` only dials the parked call's destination leg (INVITE → the endpoint
+/// auto-answers, media leg ready while the caller keeps hearing park
+/// ringback); `Bridge` answers the caller, bridges the two legs and starts
+/// recording (requires the app to be in `LegReady`). A missing stage means
+/// "do both in one shot" (single-step compatibility).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ParkStage {
+    Leg,
+    Bridge,
+}
+
 /// Unified command for session control
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -202,6 +216,37 @@ pub enum CallCommand {
         leg_id: LegId,
         /// Ringback policy (how to handle ringback tone)
         ringback: Option<RingbackPolicy>,
+    },
+
+    /// Exit a park app (Pocket agent park flow). Delivered to the running
+    /// park app as an `AppEvent::Custom("park.unpark", …)`; the session
+    /// handler fails the command when no park app is running.
+    ///
+    /// Located by the RWI/processor layer (park key / `cc_call_id`+`called` /
+    /// raw `X-cid` → session id) — this command itself carries only the
+    /// action payload.
+    Unpark {
+        /// `leg` (dial the destination only) / `bridge` (answer + bridge +
+        /// record, requires LegReady) / None = one-shot (leg + bridge).
+        #[serde(default)]
+        stage: Option<ParkStage>,
+        /// SIP destination to dial for `stage:"leg"` (e.g. `sip:980885001@…`).
+        #[serde(default)]
+        destination: Option<String>,
+        /// Abandon this park: hang up the parked caller (and any agent leg).
+        #[serde(default)]
+        cancel: Option<bool>,
+        /// Free-form reason for `cancel` (logs / trace).
+        #[serde(default)]
+        reason: Option<String>,
+        /// Ring timeout for the destination leg in seconds; `None`/0 = no
+        /// explicit timeout (rely on caller-side wait timeout BYE).
+        #[serde(default)]
+        ring_timeout_secs: Option<u64>,
+        /// Start recording once the bridge stage completes (default on when
+        /// the park target asked for recording).
+        #[serde(default)]
+        record: Option<bool>,
     },
 
     /// Hangup the session or a specific leg

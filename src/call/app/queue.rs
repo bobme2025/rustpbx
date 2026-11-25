@@ -1445,6 +1445,9 @@ impl QueueApp {
                     crate::call::TransferEndpoint::Conference(id) => {
                         AppAction::Transfer(format!("conference:{}", id))
                     }
+                    crate::call::TransferEndpoint::Park(target) => {
+                        AppAction::Transfer(format!("park:{}", target))
+                    }
                     crate::call::TransferEndpoint::Realtime(preset) => {
                         AppAction::Transfer(format!("realtime:{}", preset))
                     }

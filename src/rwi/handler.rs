@@ -488,6 +488,18 @@ fn build_command_result_event(
                     event["status"] = serde_json::json!("success");
                     event["data"] = serde_json::json!({ "user_data": user_data });
                 }
+                CommandResult::ParkList { items, total, page } => {
+                    event["status"] = serde_json::json!("success");
+                    event["data"] = serde_json::json!({
+                        "items": items,
+                        "total": total,
+                        "page": page,
+                    });
+                }
+                CommandResult::ParkInfo { entry } => {
+                    event["status"] = serde_json::json!("success");
+                    event["data"] = serde_json::json!({ "entry": entry });
+                }
             }
             event
         }

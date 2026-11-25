@@ -136,6 +136,15 @@ impl SipSession {
             || crate::proxy::proxy_call::call_meta::has_queue_name(&self.meta)
     }
 
+    /// True while a park app is driving this session — gates park signal
+    /// emission (agent leg ringing / connected / failed) and unpark delivery.
+    pub(crate) fn in_park_context(&self) -> bool {
+        self.app_runtime
+            .current_app()
+            .as_deref()
+            .is_some_and(|app| app == "park")
+    }
+
     pub(crate) async fn fail_ivr_exec_start(&mut self, reason: String) {
         {
             let mut extensions = self.extensions.write();

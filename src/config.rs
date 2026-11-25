@@ -731,6 +731,9 @@ pub struct Config {
     pub mail: Option<MailConfig>,
     #[serde(default)]
     pub rwi: Option<RwiConfig>,
+    /// Pocket agent park (`park:<context>` targets) — see [`ParkConfig`].
+    #[serde(default)]
+    pub park: Option<ParkConfig>,
     #[serde(default)]
     pub rwi_webhook: Option<LocatorWebhookConfig>,
     #[serde(default)]
@@ -2121,6 +2124,46 @@ fn default_emergency_numbers() -> Vec<String> {
     ]
 }
 
+/// Pocket agent park configuration (`[park]`, 部署清单 §10).
+///
+/// Only deployment tuning lives here — the per-call correlation key comes
+/// from the `park:` target query (`key=`) / `key_header` / the `X-cid`
+/// header (three-level resolution, park doc §3.3).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct ParkConfig {
+    /// Custom correlation header name. Empty/absent = parse `X-cid` (default).
+    #[serde(default)]
+    pub key_header: String,
+    /// Parked-call capacity per instance; at the cap new park entries are
+    /// rejected busy (486) instead of queueing. Defaults to 2000.
+    #[serde(default = "default_park_max")]
+    pub max: u32,
+    /// Final ringback fallback (`tone://freq,duration` or a file path) when
+    /// neither a per-target `progress=` nor a per-agent uploaded file exists.
+    #[serde(default = "default_park_tone")]
+    pub default_tone: String,
+    /// Root directory for per-agent ringback uploads
+    /// (`{sounds_dir}/agents/{ext}/ringback.wav`).
+    #[serde(default = "default_park_sounds_dir")]
+    pub sounds_dir: String,
+    /// Optional ring timeout (seconds) applied to unpark agent-leg dials
+    /// when the `call.unpark` command does not carry one. `0`/absent = no
+    /// explicit timeout (caller-side wait timeout drives convergence).
+    #[serde(default)]
+    pub ring_timeout_secs: Option<u64>,
+}
+
+fn default_park_max() -> u32 {
+    2000
+}
+fn default_park_tone() -> String {
+    "tone://450,1000".to_string()
+}
+fn default_park_sounds_dir() -> String {
+    "config/sounds".to_string()
+}
+
 fn default_dos_max_cps() -> u32 {
     100
 }
@@ -2956,6 +2999,7 @@ impl Default for Config {
             #[cfg(feature = "console")]
             console: None,
             rwi: None,
+            park: None,
             database_url: default_database_url(),
             database_pool: DatabasePoolConfig::default(),
             recording: None,

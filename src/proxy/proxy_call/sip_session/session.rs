@@ -8,6 +8,7 @@ use super::util::{
     parse_sipfrag_status, route_outbound_leg, sip_status_to_hangup_reason,
 };
 use super::{live_quality, transfer};
+use crate::call::app::park::ParkSignal;
 use crate::call::app::queue::QueueSignal;
 use crate::call::{DialDirection, OutboundTrunkContext, TrunkContext};
 use rsipstack::sip::{HeadersExt, ToTypedHeader};
@@ -11655,6 +11656,24 @@ impl SipSession {
                 Self::ok_or_failure(self.handle_ring(leg_id, ringback).await)
             }
 
+            park_unpark @ CallCommand::Unpark { .. } => {
+                if self.in_park_context() {
+                    let payload = crate::call::app::ParkApp::unpark_event_payload(&park_unpark)
+                        .unwrap_or_else(|| serde_json::json!({}));
+                    self.app_event_bridge.send_app_event(
+                        crate::call::app::ControllerEvent::Custom(
+                            "park.unpark".to_string(),
+                            payload,
+                        ),
+                    );
+                    info!(session_id = %self.id, "park: unpark delivered to the running park app");
+                    CommandResult::success()
+                } else {
+                    warn!(session_id = %self.id, "park: unpark without a running park app");
+                    CommandResult::failure("no park app running")
+                }
+            }
+
             CallCommand::SendDtmf { leg_id, digits } => {
                 Self::ok_or_failure(self.handle_send_dtmf(leg_id, digits).await)
             }
@@ -12082,6 +12101,18 @@ impl SipSession {
                     self.app_event_bridge
                         .send_app_event(crate::call::app::ControllerEvent::Custom(name, data));
                 }
+                // Park app twin: agent leg ringing while a park holds the caller.
+                if self.in_park_context()
+                    && let Some(ref agent_uri) = agent_uri
+                {
+                    let signal = ParkSignal::AgentRinging {
+                        leg_id: leg_id.0.clone(),
+                        agent_uri: agent_uri.clone(),
+                    };
+                    let (name, data) = signal.to_custom();
+                    self.app_event_bridge
+                        .send_app_event(crate::call::app::ControllerEvent::Custom(name, data));
+                }
                 // Session-level ringing: agent context rides call-meta enrichment.
                 self.emit_call_ringing(None, false, None);
                 CommandResult::success()
@@ -12299,6 +12330,19 @@ impl SipSession {
                         leg_id: Some(leg_id.0.clone()),
                         agent_uri: agent_uri.clone(),
                         agent_id: resolved_agent_id,
+                    };
+                    let (name, data) = signal.to_custom();
+                    self.app_event_bridge
+                        .send_app_event(crate::call::app::ControllerEvent::Custom(name, data));
+                }
+                // Park app twin: the agent leg answered — media leg ready,
+                // caller still on park ringback.
+                if self.in_park_context() {
+                    let signal = ParkSignal::AgentConnected {
+                        leg_id: leg_id.0.clone(),
+                        agent_uri: agent_uri
+                            .clone()
+                            .unwrap_or_else(|| "unknown".to_string()),
                     };
                     let (name, data) = signal.to_custom();
                     self.app_event_bridge
@@ -12626,6 +12670,18 @@ impl SipSession {
                             }
                         };
                         {
+                            let (name, data) = signal.to_custom();
+                            self.app_event_bridge.send_app_event(
+                                crate::call::app::ControllerEvent::Custom(name, data),
+                            );
+                        }
+                        // Park app twin: the dialed agent leg failed — the
+                        // park app returns to Parked and the daemon may retry.
+                        if self.in_park_context() {
+                            let signal = ParkSignal::AgentFailed {
+                                leg_id: leg_id.0.clone(),
+                                reason: reason.clone(),
+                            };
                             let (name, data) = signal.to_custom();
                             self.app_event_bridge.send_app_event(
                                 crate::call::app::ControllerEvent::Custom(name, data),
