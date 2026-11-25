@@ -57,7 +57,8 @@ pub fn router(state: Arc<ConsoleState>) -> Router {
         .merge(crate::console::handlers::routing::api_urls())
         .merge(crate::console::handlers::extension::api_urls())
         .merge(crate::console::handlers::sip_trunk::api_urls())
-        .merge(crate::console::handlers::dashboard::api_urls());
+        .merge(crate::console::handlers::dashboard::api_urls())
+        .merge(crate::call::app::park_console::api_urls());
 
     // Unified home for console-internal JSON endpoints (formerly nested inside
     // the console router). They all flow through the same api_auth_middleware.

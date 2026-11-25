@@ -90,6 +90,7 @@ pub mod error_catalog;
 pub mod ivr;
 pub mod ivr_config;
 pub mod park;
+pub mod park_console;
 pub mod queue;
 pub mod realtime;
 pub mod rwi;
