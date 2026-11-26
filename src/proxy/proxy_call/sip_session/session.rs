@@ -12805,6 +12805,32 @@ impl SipSession {
             }
 
             CallCommand::AppExited { app_execution_id } => {
+                // Park teardown event: the park app's registry entry is gone
+                // by now (on_exit removed it) — emit `park_exited` so the
+                // daemon reconciles its parked-call bookkeeping. Reason is
+                // derived from the hangup reason the session recorded.
+                if self.in_park_context() {
+                    let reason = match self.meta.hangup_reason {
+                        Some(crate::callrecord::CallRecordHangupReason::ByCaller)
+                        | Some(crate::callrecord::CallRecordHangupReason::Abandoned) => {
+                            "caller_hangup"
+                        }
+                        Some(crate::callrecord::CallRecordHangupReason::BySystem)
+                        | Some(crate::callrecord::CallRecordHangupReason::Autohangup) => {
+                            "cancelled"
+                        }
+                        Some(crate::callrecord::CallRecordHangupReason::ByRefer) => {
+                            "transferred"
+                        }
+                        _ => "ended",
+                    };
+                    self.emit_typed_rwi_event(&crate::rwi::ParkExited {
+                        call_id: self.context.session_id.clone(),
+                        context: "pocket".to_string(),
+                        key: String::new(),
+                        reason: reason.to_string(),
+                    });
+                }
                 self.handle_app_exited(Some(app_execution_id)).await
             }
 

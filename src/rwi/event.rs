@@ -431,6 +431,9 @@ pub const EVENT_TYPES: &[&str] = &[
     QueueOverflowJoined::TYPE,
     QueuePositionChanged::TYPE,
     QueueWaitTimeout::TYPE,
+    ParkAgentLeg::TYPE,
+    ParkEntered::TYPE,
+    ParkExited::TYPE,
     RealtimeEvent::TYPE,
     RecordEnd::TYPE,
     RecordPaused::TYPE,
@@ -1087,6 +1090,64 @@ pub struct QueueJoined {
     pub agent_id: Option<String>,
 }
 rwi_event!(QueueJoined, "queue_joined");
+
+/// A call entered the park app (`park:<context>` target): 183 + ringback
+/// sent, waiting for a daemon `call.unpark`. The daemon uses this to pair
+/// the parked `call_id` with the correlation key it minted in the park
+/// target (`key=`) — the "parked webhook" of the design doc (§4 optional),
+/// always emitted (not opt-in) because the daemon needs the mapping even
+/// when the key came from the `X-cid` header.
+#[derive(Debug, Clone, Serialize)]
+pub struct ParkEntered {
+    pub call_id: String,
+    /// Park context (`park:<context>` — e.g. `pocket`).
+    pub context: String,
+    /// Stable single-string correlation key (`kubeMedia_<id>` shape for
+    /// X-cid-parsed keys, the raw string otherwise).
+    pub key: String,
+    pub caller: String,
+    /// Agent extension (X-cid right segment or target `agent=`).
+    pub called: String,
+    /// Resolved ringback source (path or `tone://…`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub progress: Option<String>,
+}
+rwi_event!(ParkEntered, "park_entered");
+
+/// A parked call left the park app. `reason` distinguishes the convergence
+/// paths the daemon reconciles against: `caller_hangup` (caller BYE — wait
+/// timeout or CCM release), `cancelled` (daemon `call.unpark{cancel}`),
+/// `bridged` (unpark leg+bridge completed), `transferred` (park app exited
+/// via transfer), `error`.
+#[derive(Debug, Clone, Serialize)]
+pub struct ParkExited {
+    pub call_id: String,
+    pub context: String,
+    pub key: String,
+    pub reason: String,
+}
+rwi_event!(ParkExited, "park_exited");
+
+/// A park agent-leg dial state change (two-stage unpark progress, doc
+/// §3.4a): `state` is `dialing` | `leg_ready` | `failed` | `ring_timeout`.
+/// The daemon gates `stage:"bridge"` on `leg_ready` when it does not rely
+/// on the app's own one-shot chaining.
+#[derive(Debug, Clone, Serialize)]
+pub struct ParkAgentLeg {
+    pub call_id: String,
+    pub context: String,
+    pub key: String,
+    pub state: String,
+    /// The dialed agent leg id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub leg_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub destination: Option<String>,
+    /// Failure reason for `failed` / `ring_timeout`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+rwi_event!(ParkAgentLeg, "park_agent_leg");
 
 #[derive(Debug, Clone, Serialize)]
 pub struct QueueAgentOffered {

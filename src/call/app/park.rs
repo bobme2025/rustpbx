@@ -582,12 +582,28 @@ impl ParkApp {
                     destination = %destination,
                     "park: agent leg dialing (stage:leg)"
                 );
-                self.agent_leg = Some(leg_id);
+                self.agent_leg = Some(leg_id.clone());
                 self.state = ParkState::Dialing;
                 self.pending_bridge = stage.is_none();
                 park_registry().update_state(
                     &context.call_info.session_id,
                     ParkState::Dialing,
+                );
+                emit_park_event(
+                    context,
+                    &crate::rwi::ParkAgentLeg {
+                        call_id: context.call_info.session_id.clone(),
+                        context: self.params.context.clone(),
+                        key: self
+                            .key
+                            .clone()
+                            .map(|k| k.display_key())
+                            .unwrap_or_default(),
+                        state: "dialing".to_string(),
+                        leg_id: Some(leg_id),
+                        destination: Some(destination),
+                        reason: None,
+                    },
                 );
                 if let Some(secs) = self.ring_timeout.filter(|s| s.as_secs() > 0) {
                     controller.set_timeout(RING_TIMEOUT_ID, secs);
@@ -630,7 +646,7 @@ impl ParkApp {
         let _ = controller.stop_audio().await;
         controller.answer().await?;
         controller
-            .bridge(LegId::from("caller"), LegId::new(agent_leg))?;
+            .bridge(LegId::from("caller"), LegId::new(&agent_leg))?;
         if record.or(self.record_override).unwrap_or(true) {
             controller
                 .start_recording("", None, false)
@@ -638,6 +654,22 @@ impl ParkApp {
         }
         self.state = ParkState::Bridged;
         park_registry().update_state(&context.call_info.session_id, ParkState::Bridged);
+        emit_park_event(
+            context,
+            &crate::rwi::ParkAgentLeg {
+                call_id: context.call_info.session_id.clone(),
+                context: self.params.context.clone(),
+                key: self
+                    .key
+                    .clone()
+                    .map(|k| k.display_key())
+                    .unwrap_or_default(),
+                state: "leg_ready".to_string(),
+                leg_id: Some(agent_leg.clone()),
+                destination: None,
+                reason: None,
+            },
+        );
         tracing::info!(
             session_id = %context.call_info.session_id,
             "park: bridged (caller answered, recording started)"
@@ -649,6 +681,17 @@ impl ParkApp {
 /// Read `[park]` config, if present.
 fn park_config(context: &ApplicationContext) -> Option<&ParkConfig> {
     context.config.park.as_ref()
+}
+
+/// Emit an RWI park event through the app context's gateway (owner-directed).
+fn emit_park_event<E: crate::rwi::RwiEventSpec>(
+    context: &ApplicationContext,
+    event: &E,
+) {
+    if let Some(ref gw) = context.rwi_gateway {
+        let g = gw.read();
+        g.send_to_owner(event);
+    }
 }
 
 /// Case-insensitive SIP header lookup.
@@ -740,6 +783,17 @@ impl CallApp for ParkApp {
         // answer, no silence (§3.2 — 0.5.x early-media machinery does the
         // work; file audio loops, `tone://` plays once).
         controller.ring_with_early_media(&ringback)?;
+        emit_park_event(
+            context,
+            &crate::rwi::ParkEntered {
+                call_id: context.call_info.session_id.clone(),
+                context: self.params.context.clone(),
+                key: key.display_key(),
+                caller: self.caller.clone(),
+                called: self.called.clone(),
+                progress: Some(ringback.clone()),
+            },
+        );
         tracing::info!(
             session_id = %context.call_info.session_id,
             key = %key.display_key(),
@@ -823,6 +877,22 @@ impl CallApp for ParkApp {
                     ParkState::LegReady,
                 );
                 controller.cancel_timeout(RING_TIMEOUT_ID);
+                emit_park_event(
+                    context,
+                    &crate::rwi::ParkAgentLeg {
+                        call_id: context.call_info.session_id.clone(),
+                        context: self.params.context.clone(),
+                        key: self
+                            .key
+                            .clone()
+                            .map(|k| k.display_key())
+                            .unwrap_or_default(),
+                        state: "leg_ready".to_string(),
+                        leg_id: Some(leg_id.clone()),
+                        destination: None,
+                        reason: None,
+                    },
+                );
                 tracing::info!(
                     session_id = %context.call_info.session_id,
                     leg_id = %leg_id,
@@ -857,6 +927,22 @@ impl CallApp for ParkApp {
                     &context.call_info.session_id,
                     ParkState::Parked,
                 );
+                emit_park_event(
+                    context,
+                    &crate::rwi::ParkAgentLeg {
+                        call_id: context.call_info.session_id.clone(),
+                        context: self.params.context.clone(),
+                        key: self
+                            .key
+                            .clone()
+                            .map(|k| k.display_key())
+                            .unwrap_or_default(),
+                        state: "failed".to_string(),
+                        leg_id: Some(leg_id.clone()),
+                        destination: None,
+                        reason: Some(reason.clone()),
+                    },
+                );
                 tracing::warn!(
                     session_id = %context.call_info.session_id,
                     leg_id = %leg_id,
@@ -884,6 +970,22 @@ impl CallApp for ParkApp {
         self.pending_bridge = false;
         self.state = ParkState::Parked;
         park_registry().update_state(&context.call_info.session_id, ParkState::Parked);
+        emit_park_event(
+            context,
+            &crate::rwi::ParkAgentLeg {
+                call_id: context.call_info.session_id.clone(),
+                context: self.params.context.clone(),
+                key: self
+                    .key
+                    .clone()
+                    .map(|k| k.display_key())
+                    .unwrap_or_default(),
+                state: "ring_timeout".to_string(),
+                leg_id: None,
+                destination: None,
+                reason: Some("park_ring_timeout".to_string()),
+            },
+        );
         tracing::warn!(
             session_id = %context.call_info.session_id,
             "park: agent leg ring timeout — back to parked"
