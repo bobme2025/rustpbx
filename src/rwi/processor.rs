@@ -4169,6 +4169,81 @@ mod tests {
     use crate::call::domain::{ReferNotifyEvent, ReferNotifyEventType};
     use crate::proxy::tests::common::create_test_server;
 
+    /// `resolve_park_session` priority order (doc §3.4 / daemon D2):
+    /// call_id → key → x_cid → cc_call_id+called, and `None` when nothing
+    /// matches. Exercises the real process-wide registry.
+    #[test]
+    fn resolve_park_session_priority_order() {
+        use crate::call::app::park::{ParkEntry, ParkKey, ParkState, park_registry};
+        let registry = park_registry();
+        registry.remove_by_key(&ParkKey::Custom("rk-1".into()));
+        registry.remove_by_key(&ParkKey::CcCallId(777));
+
+        let entry = |key: ParkKey, call_id: &str| ParkEntry {
+            key,
+            call_id: call_id.into(),
+            context: "pocket".into(),
+            caller: "13800000000".into(),
+            called: "980885001".into(),
+            progress: None,
+            state: ParkState::Parked,
+            parked_at: 0,
+            agent_destination: None,
+        };
+        registry
+            .register(entry(ParkKey::Custom("rk-1".into()), "s-key"), 100)
+            .unwrap();
+        registry
+            .register(entry(ParkKey::CcCallId(777), "s-cc"), 100)
+            .unwrap();
+
+        let processor = create_resolve_processor();
+
+        // 1. explicit call_id wins, registry untouched.
+        assert_eq!(
+            processor.resolve_park_session("s-direct", "", "", "", ""),
+            Some("s-direct".to_string())
+        );
+        // 2. key.
+        assert_eq!(
+            processor.resolve_park_session("", "rk-1", "", "", ""),
+            Some("s-key".to_string())
+        );
+        // 3. raw X-cid (kubeMedia shape).
+        assert_eq!(
+            processor.resolve_park_session("", "", "", "", "kubeMedia_777-980885001"),
+            Some("s-cc".to_string())
+        );
+        // 4. cc_call_id + called fallback.
+        assert_eq!(
+            processor.resolve_park_session("", "", "777", "980885001", ""),
+            Some("s-cc".to_string())
+        );
+        // 5. nothing matches.
+        assert_eq!(
+            processor.resolve_park_session("", "missing", "", "", ""),
+            None
+        );
+        // 6. malformed cc_call_id.
+        assert_eq!(
+            processor.resolve_park_session("", "", "abc", "980885001", ""),
+            None
+        );
+
+        registry.remove_by_key(&ParkKey::Custom("rk-1".into()));
+        registry.remove_by_key(&ParkKey::CcCallId(777));
+    }
+
+    /// Minimal processor for `resolve_park_session` — the method only reads
+    /// the park registry, so placeholder deps suffice.
+    fn create_resolve_processor() -> RwiCommandProcessor {
+        RwiCommandProcessor::new(
+            std::sync::Arc::new(crate::proxy::active_call_registry::ActiveProxyCallRegistry::new()),
+            std::sync::Arc::new(parking_lot::RwLock::new(crate::rwi::RwiGateway::new())),
+            std::sync::Arc::new(crate::call::runtime::ConferenceManager::new()),
+        )
+    }
+
     #[tokio::test]
     async fn transfer_listener_drop_removes_own_sender_and_preserves_other_listeners() {
         let (server, _) = create_test_server().await;
