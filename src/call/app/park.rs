@@ -344,6 +344,9 @@ pub struct ParkAppParams {
     pub agent: Option<String>,
     /// Per-target ringback override (`progress=` query param).
     pub progress: Option<String>,
+    /// 第二段等待音（`progress2=` query param）：端腿开始振铃时切换给它，
+    /// 让主叫听到与第一段不同的铃音。
+    pub progress2: Option<String>,
     /// Record the bridged call (default: on).
     pub record: bool,
     /// Per-target park capacity override (falls back to config `max`).
@@ -360,6 +363,7 @@ impl Default for ParkAppParams {
             key: None,
             agent: None,
             progress: None,
+            progress2: None,
             record: true,
             max: None,
             key_header: None,
@@ -392,6 +396,7 @@ impl ParkAppParams {
             key: str_field(params, "key"),
             agent: str_field(params, "agent"),
             progress: str_field(params, "progress"),
+            progress2: str_field(params, "progress2"),
             record: params
                 .get("record")
                 .and_then(|v| v.as_bool())
@@ -429,6 +434,7 @@ impl ParkAppParams {
                     "key" if !v.is_empty() => out.key = Some(v),
                     "agent" if !v.is_empty() => out.agent = Some(v),
                     "progress" if !v.is_empty() => out.progress = Some(v),
+                    "progress2" if !v.is_empty() => out.progress2 = Some(v),
                     "record" => out.record = v.is_empty() || v == "1" || v.eq_ignore_ascii_case("true"),
                     "max" => out.max = v.parse::<usize>().ok(),
                     "key_header" if !v.is_empty() => out.key_header = Some(v),
@@ -460,6 +466,8 @@ pub struct ParkApp {
     called: String,
     caller: String,
     ringback: Option<String>,
+    /// 第二段等待音（端腿振铃时切换），未配置则全程保持第一段。
+    ringback2: Option<String>,
     state: ParkState,
     agent_leg: Option<String>,
     /// `stage:"bridge"` already satisfied by a one-shot unpark.
@@ -476,6 +484,7 @@ impl ParkApp {
             called: String::new(),
             caller: String::new(),
             ringback: None,
+            ringback2: None,
             state: ParkState::Parked,
             agent_leg: None,
             pending_bridge: false,
@@ -777,6 +786,7 @@ impl CallApp for ParkApp {
             });
         }
         self.ringback = Some(ringback.clone());
+        self.ringback2 = self.params.progress2.clone();
         self.ring_timeout = park_config(context).and_then(|c| c.ring_timeout_secs).map(Duration::from_secs);
 
         // Hold the caller: 183 Session Progress + looping ringback. No
@@ -860,6 +870,22 @@ impl CallApp for ParkApp {
                     leg_id = data.get("leg_id").and_then(|v| v.as_str()).unwrap_or(""),
                     "park: agent leg ringing"
                 );
+                // 端腿已振铃：主叫从第一段等待音切到第二段（progress2=），
+                // 只切放音，不重发 183（early media 已建立，见 send_early_media）。
+                if self.state == ParkState::Dialing {
+                    if let Some(ringback2) = self
+                        .ringback2
+                        .clone()
+                        .filter(|p| p.starts_with("tone://") || std::path::Path::new(p).exists())
+                    {
+                        tracing::info!(
+                            session_id = %context.call_info.session_id,
+                            progress2 = %ringback2,
+                            "park: switching caller to second-stage ringback"
+                        );
+                        controller.ring_with_early_media(&ringback2)?;
+                    }
+                }
                 Ok(AppAction::Continue)
             }
             "park_agent_connected" => {
@@ -923,6 +949,10 @@ impl CallApp for ParkApp {
                 self.agent_leg = None;
                 self.pending_bridge = false;
                 self.state = ParkState::Parked;
+                // 端腿失败回到 Parked：把主叫的等待音切回第一段。
+                if let Some(ringback) = self.ringback.clone() {
+                    let _ = controller.ring_with_early_media(&ringback);
+                }
                 park_registry().update_state(
                     &context.call_info.session_id,
                     ParkState::Parked,
